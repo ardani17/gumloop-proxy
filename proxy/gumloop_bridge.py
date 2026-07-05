@@ -147,18 +147,26 @@ app = FastAPI(title="Gumloop Bridge Proxy")
 
 
 def extract_user_message(body: dict) -> str:
-    """Extract the last user message from Anthropic Messages format."""
+    """Extract the last user message from Anthropic Messages format.
+    
+    Optimized for coding: inject system prompt into user message,
+    send only last 3 messages to save credits, and format tool results.
+    """
     messages = body.get("messages", [])
     system = body.get("system", "")
 
-    # Build a simple text from messages (Gumloop is single-turn per request)
+    # Gumloop ignores separate system prompts, so merge into user message
     parts = []
     if system:
         if isinstance(system, list):
             system = "\n".join(b.get("text", "") for b in system if b.get("type") == "text")
-        parts.append(f"[System]\n{system}")
+        if system.strip():
+            parts.append(f"Instructions: {system.strip()}\n")
 
-    for msg in messages:
+    # Send only last 3 messages to save credits (Gumloop charges per message)
+    recent = messages[-3:] if len(messages) > 3 else messages
+
+    for msg in recent:
         role = msg.get("role", "user")
         content = msg.get("content", "")
         if isinstance(content, list):
@@ -169,15 +177,26 @@ def extract_user_message(body: dict) -> str:
                     if block.get("type") == "text":
                         text_parts.append(block.get("text", ""))
                     elif block.get("type") == "tool_result":
-                        text_parts.append(f"[Tool Result]\n{json.dumps(block.get('content', ''))[:500]}")
+                        # Format tool results for Gumloop agent
+                        tool_content = block.get("content", "")
+                        if isinstance(tool_content, list):
+                            tool_content = "\n".join(
+                                t.get("text", "") for t in tool_content if isinstance(t, dict)
+                            )
+                        text_parts.append(f"[Tool Output]\n{str(tool_content)[:2000]}")
+                    elif block.get("type") == "tool_use":
+                        # Format tool calls
+                        name = block.get("name", "unknown")
+                        inp = block.get("input", {})
+                        text_parts.append(f"[Tool Call: {name}]\n{json.dumps(inp)[:500]}")
             content = "\n".join(text_parts)
         elif not isinstance(content, str):
             content = str(content)
 
         if role == "user":
-            parts.append(f"[User]\n{content}")
+            parts.append(content)
         elif role == "assistant":
-            parts.append(f"[Assistant]\n{content}")
+            parts.append(f"[Previous assistant response]: {content[:500]}")
 
     return "\n\n".join(parts)
 
@@ -195,7 +214,7 @@ def anthropic_sse_stream(request_id: str, model: str):
 
     # Stream deltas as they arrive
     last_count = 0
-    timeout = 300  # 5 minutes max
+    timeout = 600  # 10 minutes max for coding responses
     start = time.time()
 
     while time.time() - start < timeout:
@@ -286,7 +305,7 @@ async def messages(request: Request):
             state.create_future(request_id)
 
         try:
-            result = await asyncio.wait_for(state.pending[request_id], timeout=300)
+            result = await asyncio.wait_for(state.pending[request_id], timeout=600)
         except asyncio.TimeoutError:
             return JSONResponse(status_code=504, content={"type": "error", "error": {"message": "Timeout waiting for Gumloop response"}})
 
