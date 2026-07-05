@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "Gumloop Bridge",
+  "version": "1.1.0",
+  "description": "Bridge Gumloop free credits to OpenAI/Anthropic API",
+  "permissions": ["activeTab", "scripting", "storage", "tabs"],
+  "host_permissions": [
+    "https://www.gumloop.com/*",
+    "https://ws.gumloop.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.gumloop.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["injected.js"],
+      "matches": ["https://www.gumloop.com/*"]
+    }
+  ],
+  "icons": {}
+}
